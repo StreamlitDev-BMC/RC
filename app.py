@@ -212,11 +212,12 @@ if not API_KEY.startswith(('sk-', 'rk-', 'pk-')) and len(API_KEY) < 20:
 
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
-USERS_BASE_URL    = "https://api.rotacloud.com/v1/users"
-SHIFTS_BASE_URL   = "https://api.rotacloud.com/v1/shifts"
-LOCATIONS_BASE_URL= "https://api.rotacloud.com/v1/locations"
-ROLES_BASE_URL    = "https://api.rotacloud.com/v1/roles"
-LEAVE_BASE_URL    = "https://api.rotacloud.com/v1/leave"
+BASE_API_URL = st.secrets.get("api_base_url", "https://api.example.com")
+USERS_BASE_URL    = f"{BASE_API_URL}/v1/users"
+SHIFTS_BASE_URL   = f"{BASE_API_URL}/v1/shifts"  
+LOCATIONS_BASE_URL= f"{BASE_API_URL}/v1/locations"
+ROLES_BASE_URL    = f"{BASE_API_URL}/v1/roles"
+LEAVE_BASE_URL    = f"{BASE_API_URL}/v1/leave"
 
 def date_to_unix_timestamp(date_obj: datetime.date, hour=0, minute=0, second=0, timezone_str='Europe/London'):
     try:
