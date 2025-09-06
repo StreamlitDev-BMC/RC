@@ -254,7 +254,7 @@ def test_api_connection():
         return False, f"Connection error: {str(e)}"
 
 @cache_data(ttl=300)
-def get_rotacloud_users():
+def get_rc_users():
     try:
         resp = requests.get(USERS_BASE_URL, headers=HEADERS, timeout=30)
         resp.raise_for_status()
@@ -278,7 +278,7 @@ def get_rotacloud_users():
         return None
 
 @cache_data(ttl=300)
-def get_rotacloud_shifts(start_ts, end_ts, user_id):
+def get_rc_shifts(start_ts, end_ts, user_id):
     params = {
         "start": start_ts,
         "end": end_ts,
@@ -294,7 +294,7 @@ def get_rotacloud_shifts(start_ts, end_ts, user_id):
         return None
 
 @cache_data(ttl=300)
-def get_rotacloud_leave(start_str, end_str, user_id):
+def get_rc_leave(start_str, end_str, user_id):
     params = {
         "start": start_str,
         "end": end_str,
@@ -466,7 +466,7 @@ if generate:
         st.stop()
 
     with st.spinner("Fetching users..."):
-        all_users = get_rotacloud_users()
+        all_users = get_rc_users()
         if all_users is None:
             st.error("Could not retrieve users; aborting.")
             st.stop()
@@ -504,10 +504,10 @@ if generate:
         
         st.write(f"Processing: {fname} {lname} ({get_gender_display_name(gender)}) ({idx+1}/{total_users})")
 
-        shifts_json = get_rotacloud_shifts(start_ts, end_ts, uid)
+        shifts_json = get_rc_shifts(start_ts, end_ts, uid)
         total_shift_hours, processed_shifts = process_user_shifts(shifts_json, start_date, end_date)
 
-        leave_json = get_rotacloud_leave(start_str, end_str, uid)
+        leave_json = get_rc_leave(start_str, end_str, uid)
         total_leave_days, total_leave_hours, processed_leave_records = process_user_leave(leave_json, start_date, end_date)
 
         unified_total = total_shift_hours + total_leave_hours
