@@ -499,9 +499,9 @@ with st.sidebar.expander("🔧 Advanced Settings"):
         st.error("Invalid user IDs. Please enter comma-separated numbers.")
         ignored_user_ids = DEFAULT_IGNORED_IDS
 
-with st.sidebar.expander("🔐 API Configuration"):
-    api_key = st.text_input("API Key", type="password", value=st.secrets.get("rc_api_key", ""))
-    base_url = st.text_input("Base URL", value=st.secrets.get("rc_base_url", ""))
+st.sidebar.header("🔐 API Configuration")
+api_key = st.sidebar.text_input("API Key", type="password", value=st.secrets.get("rc_api_key", ""))
+base_url = st.sidebar.text_input("Base URL", value=st.secrets.get("rc_base_url", ""))
 
 generate = st.sidebar.button("🔍 Generate Report", use_container_width=True, type="primary") or quick_generate
 
