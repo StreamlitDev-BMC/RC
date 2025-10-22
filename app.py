@@ -11,8 +11,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 st.set_page_config(
     page_title="Shift & Leave Report",
@@ -316,10 +314,9 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
             if rpt["processed_shifts"]:
                 shift_data = [['Day', 'Date', 'Location', 'Role', 'Hours']]
                 for s in rpt["processed_shifts"]:
-                    day_name = datetime.datetime.fromtimestamp(s["start_time_unix"]).strftime('%A')
-                    date_str = datetime.datetime.fromtimestamp(s["start_time_unix"]).strftime('%d/%m/%y')
-                    loc = s.get("location_name", "Unknown")
-                    role = s.get("role_name", "Unknown")
+                    day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
+                    loc = get_location_name(s.get("location_id"))
+                    role = get_role_name(s.get("role_id"))
                     shift_data.append([
                         day_name[:3],
                         date_str,
@@ -446,335 +443,358 @@ with st.sidebar.expander("🔍 Filters"):
     enable_gender_filter = st.checkbox("Enable Gender Filter", value=False)
     
     if enable_gender_filter:
-        gender_options = {
-            'Male': 'M',
-            'Female': 'F',
-            'Terminal': 'T',
-            'Unknown': 'Unknown'
-        }
-        selected_genders = st.multiselect(
+        gender_options = st.multiselect(
             "Select Genders",
-            options=list(gender_options.keys()),
-            default=list(gender_options.keys())
+            options=['Male', 'Female', 'Terminal', 'Unknown'],
+            default=['Male', 'Female', 'Terminal', 'Unknown']
         )
-        selected_gender_codes = [gender_options[g] for g in selected_genders]
+        selected_gender_codes = []
+        for option in gender_options:
+            if option == 'Male':
+                selected_gender_codes.append('M')
+            elif option == 'Female':
+                selected_gender_codes.append('F')
+            elif option == 'Terminal':
+                selected_gender_codes.append('T')
+            elif option == 'Unknown':
+                selected_gender_codes.append('Unknown')
     else:
         selected_gender_codes = ['M', 'F', 'T', 'Unknown']
     
     # UPDATED DEFAULT: Threshold filter disabled by default
-    use_threshold_filter = st.checkbox("Enable Threshold Filter", value=False,
-                                      help="Filter users by total hours")
+    use_threshold_filter = st.checkbox("Enable Threshold Filter", value=False)
     
     if use_threshold_filter:
         col1, col2 = st.columns(2)
         with col1:
-            low_threshold = st.number_input("Low Threshold", min_value=0.0, value=120.0, step=10.0)
+            low_threshold = st.number_input("Min Hours", value=156, step=1)
         with col2:
-            high_threshold = st.number_input("High Threshold", min_value=0.0, value=160.0, step=10.0)
-        
-        show_threshold_color = st.checkbox("Color Code by Threshold", value=True)
+            high_threshold = st.number_input("Max Hours", value=170, step=1)
+        if low_threshold > high_threshold:
+            st.error("Min must be ≤ Max")
     else:
         low_threshold = None
         high_threshold = None
-        show_threshold_color = False
 
-with st.sidebar.expander("🔧 Advanced Settings"):
+with st.sidebar.expander("⚙️ Settings"):
     # UPDATED DEFAULT: Sort by highest hours by default
-    sort_option = st.selectbox(
-        "Sort By",
-        options=["Highest Hours", "Lowest Hours", "Name (A-Z)", "Name (Z-A)", "User ID"],
-        index=0,  # Changed from previous default to "Highest Hours"
-        help="Sort order for report results"
+    sort_option = st.radio(
+        "Sort by:",
+        ("Alphabetical", "Highest Hours", "Lowest Hours"),
+        index=1,  # Default to "Highest Hours"
+        horizontal=True
     )
     
-    ignored_user_ids_input = st.text_area(
-        "Ignored User IDs (comma-separated)",
-        value=",".join(map(str, DEFAULT_IGNORED_IDS)),
-        help="User IDs to exclude from the report"
+    if sort_option == "Alphabetical":
+        sort_option = "Alphabetical (First Name)"
+    elif sort_option == "Highest Hours":
+        sort_option = "Highest to Lowest"
+    else:
+        sort_option = "Lowest to Highest"
+    
+    ignored_input = st.text_input(
+        "Ignored IDs", 
+        value=','.join(map(str, DEFAULT_IGNORED_IDS)),
+        help="Comma-separated user IDs to ignore"
     )
-    
+
+api_key_input = st.sidebar.text_input(
+    "🔑 API Key", 
+    type="password",
+    help="Enter your API key"
+)
+
+ignored_user_ids = set()
+for part in ignored_input.split(","):
+    part = part.strip()
+    if part.isdigit():
+        ignored_user_ids.add(int(part))
+
+generate = st.sidebar.button("📊 Generate Report", use_container_width=True, type="primary")
+
+if quick_generate:
+    generate = True
+
+if not manual_dates:
+    period_display = format_period_name(start_date, end_date)
+    st.info(f"📅 **Period**: {period_display}")
+else:
+    st.info(f"📅 **Period**: {start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')}")
+
+active_filters = []
+if enable_gender_filter:
+    active_filters.append(f"Gender: {', '.join(gender_options)}")
+if use_threshold_filter:
+    active_filters.append(f"Hours: {low_threshold}-{high_threshold}")
+if ignored_user_ids:
+    active_filters.append(f"Ignored: {len(ignored_user_ids)} users")
+
+if active_filters:
+    st.info(f"🔍 **Filters**: {' | '.join(active_filters)}")
+
+API_KEY = None
+
+if api_key_input:
+    API_KEY = api_key_input.strip()
+elif os.environ.get("API_KEY"):
+    API_KEY = os.environ.get("API_KEY")
+
+if not API_KEY:
+    st.error("⚠️ **API Key Required**")
+    st.write("Enter your API key in the sidebar to continue.")
+    st.stop()
+
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+BASE_API_URL = st.secrets.get("api_base_url", "https://api.example.com")
+USERS_BASE_URL    = f"{BASE_API_URL}/v1/users"
+SHIFTS_BASE_URL   = f"{BASE_API_URL}/v1/shifts"  
+LOCATIONS_BASE_URL= f"{BASE_API_URL}/v1/locations"
+ROLES_BASE_URL    = f"{BASE_API_URL}/v1/roles"
+LEAVE_BASE_URL    = f"{BASE_API_URL}/v1/leave"
+
+# Helper functions
+def date_to_unix_timestamp(date_obj: datetime.date, hour=0, minute=0, second=0, timezone_str='Europe/London'):
     try:
-        ignored_user_ids = [int(x.strip()) for x in ignored_user_ids_input.split(",") if x.strip()]
-    except ValueError:
-        st.error("Invalid user IDs. Please enter comma-separated numbers.")
-        ignored_user_ids = DEFAULT_IGNORED_IDS
-
-st.sidebar.header("🔐 API Configuration")
-api_key = st.sidebar.text_input("API Key", type="password", value=st.secrets.get("rc_api_key", ""))
-base_url = st.sidebar.text_input("Base URL", value=st.secrets.get("rc_base_url", ""))
-
-generate = st.sidebar.button("🔍 Generate Report", use_container_width=True, type="primary") or quick_generate
-
-# Helper functions (keeping the original ones from the file)
-@cache_data(ttl=600)
-def test_api_connection():
-    if not api_key or not base_url:
-        return False, "API key or base URL not configured"
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
-    try:
-        response = requests.get(f"{base_url}/users", headers=headers, timeout=10)
-        if response.status_code == 200:
-            return True, "Connection successful"
-        else:
-            return False, f"HTTP {response.status_code}"
+        local_tz = pytz.timezone(timezone_str)
+        dt_naive = datetime.datetime.combine(date_obj, datetime.time(hour, minute, second))
+        local_dt = local_tz.localize(dt_naive, is_dst=None)
+        utc_dt = local_dt.astimezone(pytz.utc)
+        return int(utc_dt.timestamp())
     except Exception as e:
-        return False, str(e)
+        st.warning(f"Error converting date '{date_obj}' to timestamp: {e}")
+        return None
 
-def date_to_unix_timestamp(date_obj, hour=0, minute=0, second=0):
-    dt = datetime.datetime.combine(date_obj, datetime.time(hour=hour, minute=minute, second=second))
-    london_tz = pytz.timezone('Europe/London')
-    dt = london_tz.localize(dt)
-    return int(dt.timestamp())
+def date_str_to_date(date_str: str):
+    try:
+        return datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+    except:
+        return None
 
-@cache_data(ttl=600)
+def test_api_connection():
+    try:
+        response = requests.get(USERS_BASE_URL, headers=HEADERS, params={"limit": 1})
+        if response.status_code == 401:
+            return False, "Invalid API key or unauthorized access"
+        elif response.status_code == 403:
+            return False, "API key valid but insufficient permissions"
+        elif response.status_code == 429:
+            return False, "Rate limit exceeded"
+        elif response.status_code >= 500:
+            return False, f"Server error: {response.status_code}"
+        else:
+            response.raise_for_status()
+            return True, "Connection successful"
+    except requests.exceptions.RequestException as e:
+        return False, f"Connection error: {str(e)}"
+
+@cache_data(ttl=300)
 def get_rc_users():
-    if not api_key or not base_url:
-        return None
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        response = requests.get(f"{base_url}/users", headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json()
+        resp = requests.get(USERS_BASE_URL, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if resp.status_code == 401:
+            st.error("🔒 Invalid API key")
+        elif resp.status_code == 403:
+            st.error("🚫 Insufficient permissions")
+        elif resp.status_code == 429:
+            st.error("⏰ Rate limit exceeded")
         else:
-            return None
-    except Exception:
+            st.error(f"Error {resp.status_code}")
+        return None
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Request timeout")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Connection error")
         return None
 
-@cache_data(ttl=600)
+@cache_data(ttl=300)
 def get_rc_shifts(start_ts, end_ts, user_id):
-    if not api_key or not base_url:
-        return None
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
-    url = f"{base_url}/shifts?start={start_ts}&end={end_ts}&user_id={user_id}"
+    params = {
+        "start": start_ts,
+        "end": end_ts,
+        "published": "true"
+    }
+    params["users[]"] = [user_id]
     try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception:
+        resp = requests.get(SHIFTS_BASE_URL, headers=HEADERS, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except:
+        return None
+
+@cache_data(ttl=300)
+def get_rc_leave(start_str, end_str, user_id):
+    params = {
+        "start": start_str,
+        "end": end_str,
+        "include_deleted": "false",
+        "include_denied": "false",
+        "include_requested": "false",
+        "include_expired": "true"
+    }
+    params["users[]"] = [user_id]
+    try:
+        resp = requests.get(LEAVE_BASE_URL, headers=HEADERS, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except:
         return None
 
 @cache_data(ttl=600)
-def get_rc_leave(start_str, end_str, user_id):
-    if not api_key or not base_url:
-        return None
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
-    url = f"{base_url}/leave?start={start_str}&end={end_str}&user_id={user_id}"
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception:
-        return None
-
-@cache_data(ttl=3600)
-def get_rc_locations():
-    if not api_key or not base_url:
-        return {}
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
-    try:
-        response = requests.get(f"{base_url}/locations", headers=headers, timeout=30)
-        if response.status_code == 200:
-            locations = response.json()
-            return {loc.get("id"): loc.get("name", "Unknown") for loc in locations}
-        else:
-            return {}
-    except Exception:
-        return {}
-
-@cache_data(ttl=3600)
-def get_rc_roles():
-    if not api_key or not base_url:
-        return {}
-    
-    headers = {"Authorization": f"Bearer {api_key}"}
-    try:
-        response = requests.get(f"{base_url}/roles", headers=headers, timeout=30)
-        if response.status_code == 200:
-            roles = response.json()
-            return {role.get("id"): role.get("name", "Unknown") for role in roles}
-        else:
-            return {}
-    except Exception:
-        return {}
-
 def get_location_name(location_id):
-    locations = get_rc_locations()
-    return locations.get(location_id, "Unknown")
+    if location_id is None:
+        return "N/A"
+    try:
+        resp = requests.get(f"{LOCATIONS_BASE_URL}/{location_id}", headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("name", f"Loc {location_id}")
+    except:
+        return f"Loc {location_id}"
 
+@cache_data(ttl=600)
 def get_role_name(role_id):
-    roles = get_rc_roles()
-    return roles.get(role_id, "Unknown")
+    if role_id is None:
+        return "N/A"
+    try:
+        resp = requests.get(f"{ROLES_BASE_URL}/{role_id}", headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("name", f"Role {role_id}")
+    except:
+        return f"Role {role_id}"
 
-def process_user_shifts(shifts_json, start_date, end_date):
+def process_user_shifts(shifts_json, report_start_date, report_end_date):
+    total_seconds = 0
+    processed = []
     if not shifts_json:
         return 0.0, []
-    
-    total_hours = 0.0
-    processed_shifts = []
-    
     for shift in shifts_json:
-        start_unix = shift.get("start_time_unix")
-        end_unix = shift.get("end_time_unix")
-        
-        if start_unix and end_unix:
-            shift_start = datetime.datetime.fromtimestamp(start_unix).date()
-            shift_end = datetime.datetime.fromtimestamp(end_unix).date()
-            
-            if shift_start >= start_date and shift_end <= end_date:
-                hours = (end_unix - start_unix) / 3600.0
-                total_hours += hours
-                
-                shift_info = {
-                    "start_time_unix": start_unix,
-                    "end_time_unix": end_unix,
-                    "net_work_hours": hours,
-                    "location_id": shift.get("location_id"),
-                    "role_id": shift.get("role_id"),
-                    "location_name": get_location_name(shift.get("location_id")),
-                    "role_name": get_role_name(shift.get("role_id"))
-                }
-                processed_shifts.append(shift_info)
-    
-    return total_hours, processed_shifts
+        st_unix = shift.get("start_time")
+        en_unix = shift.get("end_time")
+        minutes_break = shift.get("minutes_break", 0) or 0
+        if st_unix is None or en_unix is None:
+            continue
+        duration = en_unix - st_unix
+        net = duration - minutes_break * 60
+        total_seconds += net
+        processed.append({
+            "shift_id": shift.get("id"),
+            "start_time_unix": st_unix,
+            "location_id": shift.get("location"),
+            "role_id": shift.get("role"),
+            "net_work_hours": round(net/3600, 2)
+        })
+    total_hours = round(total_seconds/3600, 2)
+    return total_hours, processed
 
-def process_user_leave(leave_json, start_date, end_date):
-    if not leave_json:
-        return 0.0, 0.0, []
-    
+def process_user_leave(leave_json, report_start_date, report_end_date):
     total_days = 0.0
     total_hours = 0.0
-    processed_records = []
-    
+    processed = []
+    if not leave_json:
+        return 0.0, 0.0, []
     for record in leave_json:
-        leave_start_str = record.get("start_date")
-        leave_end_str = record.get("end_date")
-        
-        if not leave_start_str or not leave_end_str:
+        if record.get("status") != "approved":
             continue
-        
-        leave_start = datetime.datetime.strptime(leave_start_str, "%Y-%m-%d").date()
-        leave_end = datetime.datetime.strptime(leave_end_str, "%Y-%m-%d").date()
-        
-        overlap_start = max(leave_start, start_date)
-        overlap_end = min(leave_end, end_date)
-        
-        if overlap_start <= overlap_end:
-            days_in_period = (overlap_end - overlap_start).days + 1
-            hours_in_period = days_in_period * 8.0
-            
-            total_days += days_in_period
-            total_hours += hours_in_period
-            
-            record_info = {
-                "type": record.get("type", "Unknown"),
-                "status": record.get("status", "Unknown"),
-                "days_in_report_period": days_in_period,
-                "hours_in_report_period": hours_in_period
-            }
-            processed_records.append(record_info)
-    
-    return total_days, total_hours, processed_records
-
-def filter_by_gender(users, selected_gender_codes):
-    filtered = []
-    for u in users:
-        uid = u.get("id")
-        user_gender = get_user_gender(uid)
-        if user_gender in selected_gender_codes:
-            u["gender"] = user_gender
-            filtered.append(u)
-    return filtered
-
-def sort_user_reports(reports, sort_option):
-    if sort_option == "Highest Hours":
-        return sorted(reports, key=lambda x: x["unified_total"], reverse=True)
-    elif sort_option == "Lowest Hours":
-        return sorted(reports, key=lambda x: x["unified_total"])
-    elif sort_option == "Name (A-Z)":
-        return sorted(reports, key=lambda x: (x["first_name"], x["last_name"]))
-    elif sort_option == "Name (Z-A)":
-        return sorted(reports, key=lambda x: (x["first_name"], x["last_name"]), reverse=True)
-    elif sort_option == "User ID":
-        return sorted(reports, key=lambda x: x["user_id"])
-    else:
-        return reports
+        days_sum = 0.0
+        hours_sum = 0.0
+        for date_entry in record.get("dates", []):
+            dstr = date_entry.get("date")
+            ddate = date_str_to_date(dstr)
+            if not ddate:
+                continue
+            if report_start_date <= ddate <= report_end_date:
+                days_val = date_entry.get("days", 0) or 0
+                hours_val = date_entry.get("hours", 0) or 0
+                days_sum += days_val
+                hours_sum += hours_val
+        if days_sum > 0 or hours_sum > 0:
+            total_days += days_sum
+            total_hours += hours_sum
+            processed.append({
+                "type": record.get("type"),
+                "status": record.get("status"),
+                "days_in_report_period": days_sum,
+                "hours_in_report_period": hours_sum
+            })
+    total_days = round(total_days, 1)
+    total_hours = round(total_hours, 1)
+    return total_days, total_hours, processed
 
 def weekday_and_ddmmyy(unix_ts):
-    dt = datetime.datetime.fromtimestamp(unix_ts)
-    day_name = dt.strftime("%A")
-    date_str = dt.strftime("%d/%m/%y")
+    dt_utc = datetime.datetime.fromtimestamp(unix_ts, tz=pytz.utc)
+    local_tz = pytz.timezone('Europe/London')
+    dt_local = dt_utc.astimezone(local_tz)
+    day_name = dt_local.strftime('%A')
+    date_str = dt_local.strftime('%d/%m/%y')
     return day_name, date_str
 
-def display_user(rpt, show_threshold_color=False):
-    uid = rpt["user_id"]
-    fname = rpt["first_name"]
-    lname = rpt["last_name"]
-    gender_display = get_gender_display_name(rpt["gender"])
-    
-    with st.expander(f"**{fname} {lname}** ({gender_display}) - ID: {uid} - **{rpt['unified_total']:.2f}h**"):
-        ut = rpt["unified_total"]
-        if show_threshold_color and use_threshold_filter:
-            if ut < low_threshold:
-                color = "red"
-            elif ut > high_threshold:
-                color = "orange"
-            else:
-                color = "green"
-            st.markdown(
-                f"**Total Hours**: <span style='color:{color};'>{ut:.1f} hours</span>",
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(f"**Total Hours**: {ut:.2f} hours")
+def sort_user_reports(user_reports, sort_option):
+    if sort_option == "Alphabetical (First Name)":
+        return sorted(user_reports, key=lambda r: (r.get("first_name", "").lower(), r.get("last_name", "").lower()))
+    elif sort_option == "Highest to Lowest":
+        return sorted(user_reports, key=lambda r: r["unified_total"], reverse=True)
+    elif sort_option == "Lowest to Highest":
+        return sorted(user_reports, key=lambda r: r["unified_total"])
+    else:
+        return user_reports
 
-        st.markdown(f"**Shift Hours**: {rpt['total_shift_hours']:.2f}")
-        if rpt["processed_shifts"]:
-            rows = []
-            for s in rpt["processed_shifts"]:
-                day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
-                loc = s.get("location_name", "Unknown")
-                role = s.get("role_name", "Unknown")
-                rows.append({
-                    "Day": day_name,
-                    "Date": date_str,
-                    "Location": loc,
-                    "Role": role,
-                    "Hours": s.get("net_work_hours", 0)
-                })
-            df_shifts = pd.DataFrame(rows)
-            st.dataframe(df_shifts, use_container_width=True, hide_index=True)
-        else:
-            st.write("No shifts found.")
-
-        if rpt["total_leave_hours"] > 0 or rpt["total_leave_days"] > 0:
-            st.markdown(f"**Leave Days**: {rpt['total_leave_days']:.1f}")
-            st.markdown(f"**Leave Hours**: {rpt['total_leave_hours']:.2f}")
-            if rpt["processed_leave_records"]:
-                rows = []
-                for rec in rpt["processed_leave_records"]:
-                    rows.append({
-                        "Type": rec.get("type"),
-                        "Status": rec.get("status"),
-                        "Days": f"{rec.get('days_in_report_period', 0):.1f}",
-                        "Hours": f"{rec.get('hours_in_report_period', 0):.2f}"
-                    })
-                df_leave = pd.DataFrame(rows)
-                st.dataframe(df_leave, use_container_width=True, hide_index=True)
+def filter_by_gender(user_list, selected_gender_codes):
+    filtered = []
+    for user in user_list:
+        user_gender = get_user_gender(user["id"])
+        if user_gender in selected_gender_codes:
+            user["gender"] = user_gender
+            filtered.append(user)
+    return filtered
 
 def display_user_mobile(rpt, show_threshold_color=False):
-    uid = rpt["user_id"]
     fname = rpt["first_name"]
     lname = rpt["last_name"]
-    gender_display = get_gender_display_name(rpt["gender"])
+    gender_display = get_gender_display_name(rpt["gender"])[:1]
+    ut = rpt["unified_total"]
+    
+    if show_threshold_color and use_threshold_filter:
+        if ut < low_threshold:
+            indicator = "🔴"
+        elif ut > high_threshold:
+            indicator = "🟠"
+        else:
+            indicator = "🟢"
+    else:
+        indicator = "📊"
+    
+    with st.expander(f"{indicator} {fname} {lname} ({gender_display}) - {ut:.1f}h"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total", f"{ut:.1f}h")
+        with col2:
+            st.metric("Shifts", f"{rpt['total_shift_hours']:.1f}h")
+        with col3:
+            st.metric("Leave", f"{rpt['total_leave_hours']:.1f}h")
+        
+        if rpt["processed_shifts"]:
+            st.caption("**Shifts:**")
+            for s in rpt["processed_shifts"][:5]:
+                day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
+                st.text(f"• {day_name[:3]} {date_str}: {s.get('net_work_hours', 0)}h")
+            if len(rpt["processed_shifts"]) > 5:
+                st.caption(f"...+{len(rpt['processed_shifts'])-5} more")
+        
+        if rpt["total_leave_hours"] > 0:
+            st.caption(f"**Leave:** {rpt['total_leave_days']:.1f} days ({rpt['total_leave_hours']:.1f}h)")
+
+def display_user(rpt, show_threshold_color=False):
+    fname = rpt["first_name"]
+    lname = rpt["last_name"]
+    uid = rpt["user_id"]
+    gender = rpt["gender"]
+    gender_display = get_gender_display_name(gender)
     
     st.subheader(f"{fname} {lname} ({gender_display}) (ID: {uid})")
 
@@ -798,8 +818,8 @@ def display_user_mobile(rpt, show_threshold_color=False):
         rows = []
         for s in rpt["processed_shifts"]:
             day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
-            loc = s.get("location_name", "Unknown")
-            role = s.get("role_name", "Unknown")
+            loc = get_location_name(s.get("location_id"))
+            role = get_role_name(s.get("role_id"))
             rows.append({
                 "Day": day_name,
                 "Date": date_str,
