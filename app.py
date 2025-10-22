@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 from io import BytesIO
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import letter, A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
@@ -143,7 +143,7 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
                        low_threshold=None, high_threshold=None):
     """Generate a styled PDF report with Tailwind-inspired design"""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter,
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter),
                            rightMargin=0.75*inch, leftMargin=0.75*inch,
                            topMargin=1*inch, bottomMargin=0.75*inch)
     
