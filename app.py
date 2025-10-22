@@ -546,7 +546,7 @@ if not API_KEY:
 
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
-BASE_API_URL = st.secrets.get("api_base_url", "https://api.example.com")
+BASE_API_URL = st.secrets.get("rc_base_url", "https://api.example.com")
 USERS_BASE_URL    = f"{BASE_API_URL}/v1/users"
 SHIFTS_BASE_URL   = f"{BASE_API_URL}/v1/shifts"  
 LOCATIONS_BASE_URL= f"{BASE_API_URL}/v1/locations"
