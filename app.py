@@ -767,12 +767,12 @@ def sort_user_reports(user_reports, sort_option):
     if sort_option == "Alphabetical (First Name)":
         return sorted(user_reports, key=lambda r: (r.get("first_name", "").lower(), r.get("last_name", "").lower()))
     elif sort_option == "Highest to Lowest":
-        return sorted(user_reports, key=lambda r: r["unified_total"], reverse=True)
+        return sorted(user_reports, key=lambda r: r.get("unified_total", 0), reverse=True)
     elif sort_option == "Lowest to Highest":
-        return sorted(user_reports, key=lambda r: r["unified_total"])
+        return sorted(user_reports, key=lambda r: r.get("unified_total", 0))
     elif sort_option == "Most Under-worked":
-        return sorted(user_reports, key=lambda r: (r.get("variance", 0)), 
-                     key=lambda r: r.get("variance", 0))
+        # sort ascending so the most negative variance (most under-worked) is first
+        return sorted(user_reports, key=lambda r: r.get("variance", 0))
     elif sort_option == "Most Over-worked":
         return sorted(user_reports, key=lambda r: r.get("variance", 0), reverse=True)
     else:
