@@ -138,6 +138,42 @@ def get_current_period():
 def format_period_name(start_date, end_date):
     return f"{start_date.strftime('%b %Y')} Period ({start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')})"
 
+def calculate_expected_hours(weekly_hours, start_date, end_date):
+    """Calculate expected hours based on weekly hours and period length"""
+    if weekly_hours is None or weekly_hours <= 0:
+        return None
+    
+    days_in_period = (end_date - start_date).days + 1  # inclusive
+    weeks = days_in_period / 7
+    expected = weeks * weekly_hours
+    return round(expected, 2)
+
+def get_variance_color(actual_hours, expected_hours):
+    """Determine color based on variance"""
+    if expected_hours is None or expected_hours <= 0:
+        return None
+    
+    if actual_hours < expected_hours:
+        return "red"  # Under-worked
+    elif actual_hours > expected_hours:
+        return "green"  # Over-worked
+    else:
+        return "gray"  # On target
+
+def get_variance_emoji(actual_hours, expected_hours):
+    """Get emoji indicator for variance"""
+    if expected_hours is None:
+        return "❓"
+    
+    if actual_hours < expected_hours:
+        variance_pct = ((expected_hours - actual_hours) / expected_hours) * 100
+        return f"🔴 ({variance_pct:.1f}% under)"
+    elif actual_hours > expected_hours:
+        variance_pct = ((actual_hours - expected_hours) / expected_hours) * 100
+        return f"🟢 ({variance_pct:.1f}% over)"
+    else:
+        return "🟡 (On target)"
+
 # PDF Generation Function
 def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter=False, 
                        low_threshold=None, high_threshold=None):
@@ -204,7 +240,7 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
     story = []
     
     # Title
-    story.append(Paragraph("📊 Shift & Leave Report", title_style))
+    story.append(Paragraph("📊 Shift & Leave Report with Variance Analysis", title_style))
     
     # Date range
     date_range_text = f"Period: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
@@ -222,7 +258,7 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
         story.append(Paragraph(summary_text, normal_style))
         story.append(Spacer(1, 0.2*inch))
     
-    # Table header style (bg-gray-50 border-b-2 border-gray-300)
+    # Table header style
     table_header_style = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F9FAFB')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#111827')),
@@ -234,7 +270,7 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
         ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#E5E7EB')),
     ]
     
-    # Table data style (text-sm text-gray-700)
+    # Table data style
     table_data_style = [
         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
         ('FONTSIZE', (0, 1), (-1, -1), 9),
@@ -244,19 +280,7 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
         ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
     ]
     
-    # Group users by threshold if enabled
-    if use_threshold_filter and low_threshold and high_threshold:
-        below = [rpt for rpt in user_reports if rpt["unified_total"] < low_threshold]
-        above = [rpt for rpt in user_reports if rpt["unified_total"] > high_threshold]
-        between = [rpt for rpt in user_reports if low_threshold <= rpt["unified_total"] <= high_threshold]
-        
-        groups = [
-            (f"🔴 Below {low_threshold} hours", below, colors.HexColor('#FEE2E2')),
-            (f"🟢 {low_threshold}-{high_threshold} hours", between, colors.HexColor('#D1FAE5')),
-            (f"🟠 Above {high_threshold} hours", above, colors.HexColor('#FED7AA')),
-        ]
-    else:
-        groups = [("All Users", user_reports, None)]
+    groups = [("All Users", user_reports, None)]
     
     for group_name, group_reports, bg_color in groups:
         if not group_reports:
@@ -265,26 +289,42 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
         # Section header
         story.append(Paragraph(f"{group_name} ({len(group_reports)} users)", section_header_style))
         
-        # Create summary table
-        summary_data = [['Name', 'ID', 'Gender', 'Shift Hours', 'Leave Hours', 'Total Hours']]
+        # Create summary table with variance column
+        summary_data = [['Name', 'ID', 'Weekly Hrs', 'Expected', 'Actual', 'Variance']]
         
         for rpt in group_reports:
             fname = rpt["first_name"]
             lname = rpt["last_name"]
             uid = rpt["user_id"]
-            gender_display = get_gender_display_name(rpt["gender"])
+            
+            expected = rpt.get("expected_hours")
+            actual = rpt["unified_total"]
+            weekly = rpt.get("weekly_hours", 0)
+            
+            if expected is not None:
+                variance = actual - expected
+                variance_str = f"{variance:+.2f}"
+                if variance < 0:
+                    variance_indicator = f"🔴 {variance_str}"
+                elif variance > 0:
+                    variance_indicator = f"🟢 {variance_str}"
+                else:
+                    variance_indicator = f"🟡 {variance_str}"
+            else:
+                expected = "N/A"
+                variance_indicator = "N/A"
             
             summary_data.append([
                 f"{fname} {lname}",
                 str(uid),
-                gender_display,
-                f"{rpt['total_shift_hours']:.2f}",
-                f"{rpt['total_leave_hours']:.2f}",
-                f"{rpt['unified_total']:.2f}"
+                f"{weekly:.1f}" if weekly else "N/A",
+                f"{expected:.2f}" if isinstance(expected, float) else str(expected),
+                f"{actual:.2f}",
+                variance_indicator
             ])
         
         # Create table
-        col_widths = [2.2*inch, 0.8*inch, 0.8*inch, 1*inch, 1*inch, 1*inch]
+        col_widths = [2*inch, 0.7*inch, 1*inch, 1*inch, 1*inch, 1.3*inch]
         summary_table = Table(summary_data, colWidths=col_widths)
         
         # Apply styles
@@ -292,60 +332,6 @@ def generate_pdf_report(user_reports, start_date, end_date, use_threshold_filter
         
         story.append(summary_table)
         story.append(Spacer(1, 0.3*inch))
-        
-        # Detailed breakdown for each user
-        for rpt in group_reports:
-            fname = rpt["first_name"]
-            lname = rpt["last_name"]
-            uid = rpt["user_id"]
-            gender_display = get_gender_display_name(rpt["gender"])
-            
-            # User header
-            user_header = f"<b>{fname} {lname}</b> ({gender_display}) - ID: {uid}"
-            story.append(Paragraph(user_header, user_name_style))
-            
-            # User stats
-            stats_text = f"Total Hours: <b>{rpt['unified_total']:.2f}</b> | " + \
-                        f"Shift Hours: {rpt['total_shift_hours']:.2f} | " + \
-                        f"Leave Hours: {rpt['total_leave_hours']:.2f}"
-            story.append(Paragraph(stats_text, normal_style))
-            
-            # Shifts table
-            if rpt["processed_shifts"]:
-                shift_data = [['Day', 'Date', 'Location', 'Role', 'Hours']]
-                for s in rpt["processed_shifts"]:
-                    day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
-                    loc = get_location_name(s.get("location_id"))
-                    role = get_role_name(s.get("role_id"))
-                    shift_data.append([
-                        day_name[:3],
-                        date_str,
-                        loc,
-                        role,
-                        f"{s.get('net_work_hours', 0):.2f}"
-                    ])
-                
-                shift_table = Table(shift_data, colWidths=[0.7*inch, 0.9*inch, 1.8*inch, 1.8*inch, 0.7*inch])
-                shift_table.setStyle(TableStyle(table_header_style + table_data_style))
-                story.append(shift_table)
-                story.append(Spacer(1, 0.1*inch))
-            
-            # Leave table
-            if rpt["total_leave_hours"] > 0 and rpt["processed_leave_records"]:
-                leave_data = [['Type', 'Status', 'Days', 'Hours']]
-                for rec in rpt["processed_leave_records"]:
-                    leave_data.append([
-                        rec.get("type", "Unknown"),
-                        rec.get("status", "Unknown"),
-                        f"{rec.get('days_in_report_period', 0):.1f}",
-                        f"{rec.get('hours_in_report_period', 0):.2f}"
-                    ])
-                
-                leave_table = Table(leave_data, colWidths=[2*inch, 1.5*inch, 1*inch, 1*inch])
-                leave_table.setStyle(TableStyle(table_header_style + table_data_style))
-                story.append(leave_table)
-            
-            story.append(Spacer(1, 0.2*inch))
     
     # Build PDF
     doc.build(story)
@@ -363,7 +349,7 @@ if 'mobile_view' not in st.session_state:
 if 'generated_report' not in st.session_state:
     st.session_state.generated_report = None
 
-st.title("📊 Shift & Leave Report")
+st.title("📊 Shift & Leave Report with Variance Analysis")
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -461,7 +447,19 @@ with st.sidebar.expander("🔍 Filters"):
     else:
         selected_gender_codes = ['M', 'F', 'T', 'Unknown']
     
-    # UPDATED DEFAULT: Threshold filter disabled by default
+    # Variance filter
+    enable_variance_filter = st.checkbox("Filter by Variance Status", value=False,
+                                        help="Show only over/under/on-target staff")
+    
+    if enable_variance_filter:
+        variance_options = st.multiselect(
+            "Variance Status",
+            options=['Under-worked 🔴', 'On-target 🟡', 'Over-worked 🟢'],
+            default=['Under-worked 🔴', 'On-target 🟡', 'Over-worked 🟢']
+        )
+    else:
+        variance_options = ['Under-worked 🔴', 'On-target 🟡', 'Over-worked 🟢']
+    
     use_threshold_filter = st.checkbox("Enable Threshold Filter", value=False)
     
     if use_threshold_filter:
@@ -477,20 +475,21 @@ with st.sidebar.expander("🔍 Filters"):
         high_threshold = None
 
 with st.sidebar.expander("⚙️ Settings"):
-    # UPDATED DEFAULT: Sort by highest hours by default
     sort_option = st.radio(
         "Sort by:",
-        ("Alphabetical", "Highest Hours", "Lowest Hours"),
-        index=1,  # Default to "Highest Hours"
+        ("Alphabetical", "Highest Hours", "Lowest Hours", "Most Under-worked", "Most Over-worked"),
+        index=1,
         horizontal=True
     )
     
-    if sort_option == "Alphabetical":
-        sort_option = "Alphabetical (First Name)"
-    elif sort_option == "Highest Hours":
-        sort_option = "Highest to Lowest"
-    else:
-        sort_option = "Lowest to Highest"
+    sort_mapping = {
+        "Alphabetical": "Alphabetical (First Name)",
+        "Highest Hours": "Highest to Lowest",
+        "Lowest Hours": "Lowest to Highest",
+        "Most Under-worked": "Most Under-worked",
+        "Most Over-worked": "Most Over-worked"
+    }
+    sort_option = sort_mapping.get(sort_option, sort_option)
     
     ignored_input = st.text_input(
         "Ignored IDs", 
@@ -524,6 +523,8 @@ else:
 active_filters = []
 if enable_gender_filter:
     active_filters.append(f"Gender: {', '.join(gender_options)}")
+if enable_variance_filter:
+    active_filters.append(f"Variance: {', '.join(variance_options)}")
 if use_threshold_filter:
     active_filters.append(f"Hours: {low_threshold}-{high_threshold}")
 if ignored_user_ids:
@@ -552,6 +553,7 @@ SHIFTS_BASE_URL   = f"{BASE_API_URL}/v1/shifts"
 LOCATIONS_BASE_URL= f"{BASE_API_URL}/v1/locations"
 ROLES_BASE_URL    = f"{BASE_API_URL}/v1/roles"
 LEAVE_BASE_URL    = f"{BASE_API_URL}/v1/leave"
+CONTRACTS_BASE_URL= f"{BASE_API_URL}/v1/contracts"
 
 # Helper functions
 def date_to_unix_timestamp(date_obj: datetime.date, hour=0, minute=0, second=0, timezone_str='Europe/London'):
@@ -641,6 +643,33 @@ def get_rc_leave(start_str, end_str, user_id):
         resp = requests.get(LEAVE_BASE_URL, headers=HEADERS, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
+    except:
+        return None
+
+@cache_data(ttl=600)
+def get_user_weekly_hours(user_id):
+    """Fetch user's contract information including weekly hours"""
+    try:
+        # Try to get contract via user endpoint first
+        resp = requests.get(f"{USERS_BASE_URL}/{user_id}", headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        user_data = resp.json()
+        
+        # Check if weekly hours are in user data
+        if "weekly_hours" in user_data:
+            return float(user_data.get("weekly_hours", 0)) or None
+        
+        # Alternative: try contracts endpoint
+        if "contract_id" in user_data or "contract" in user_data:
+            contract_id = user_data.get("contract_id") or user_data.get("contract", {}).get("id")
+            if contract_id:
+                contract_resp = requests.get(f"{CONTRACTS_BASE_URL}/{contract_id}", 
+                                            headers=HEADERS, timeout=30)
+                if contract_resp.status_code == 200:
+                    contract_data = contract_resp.json()
+                    return float(contract_data.get("weekly_hours", 0)) or None
+        
+        return None
     except:
         return None
 
@@ -741,6 +770,11 @@ def sort_user_reports(user_reports, sort_option):
         return sorted(user_reports, key=lambda r: r["unified_total"], reverse=True)
     elif sort_option == "Lowest to Highest":
         return sorted(user_reports, key=lambda r: r["unified_total"])
+    elif sort_option == "Most Under-worked":
+        return sorted(user_reports, key=lambda r: (r.get("variance", 0)), 
+                     key=lambda r: r.get("variance", 0))
+    elif sort_option == "Most Over-worked":
+        return sorted(user_reports, key=lambda r: r.get("variance", 0), reverse=True)
     else:
         return user_reports
 
@@ -753,23 +787,38 @@ def filter_by_gender(user_list, selected_gender_codes):
             filtered.append(user)
     return filtered
 
-def display_user_mobile(rpt, show_threshold_color=False):
+def filter_by_variance(user_reports, variance_options):
+    """Filter users based on variance status"""
+    filtered = []
+    for rpt in user_reports:
+        expected = rpt.get("expected_hours")
+        actual = rpt["unified_total"]
+        
+        if expected is None:
+            continue
+        
+        if actual < expected and 'Under-worked 🔴' in variance_options:
+            filtered.append(rpt)
+        elif actual > expected and 'Over-worked 🟢' in variance_options:
+            filtered.append(rpt)
+        elif actual == expected and 'On-target 🟡' in variance_options:
+            filtered.append(rpt)
+    
+    return filtered
+
+def display_user_mobile(rpt, show_variance_indicator=True):
     fname = rpt["first_name"]
     lname = rpt["last_name"]
     gender_display = get_gender_display_name(rpt["gender"])[:1]
     ut = rpt["unified_total"]
+    expected = rpt.get("expected_hours")
     
-    if show_threshold_color and use_threshold_filter:
-        if ut < low_threshold:
-            indicator = "🔴"
-        elif ut > high_threshold:
-            indicator = "🟠"
-        else:
-            indicator = "🟢"
+    if show_variance_indicator and expected is not None:
+        variance_emoji = get_variance_emoji(ut, expected)
     else:
-        indicator = "📊"
+        variance_emoji = "📊"
     
-    with st.expander(f"{indicator} {fname} {lname} ({gender_display}) - {ut:.1f}h"):
+    with st.expander(f"{variance_emoji} {fname} {lname} ({gender_display}) - {ut:.1f}h"):
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total", f"{ut:.1f}h")
@@ -777,6 +826,22 @@ def display_user_mobile(rpt, show_threshold_color=False):
             st.metric("Shifts", f"{rpt['total_shift_hours']:.1f}h")
         with col3:
             st.metric("Leave", f"{rpt['total_leave_hours']:.1f}h")
+        
+        # Variance section
+        if expected is not None:
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Expected", f"{expected:.1f}h")
+            with col2:
+                variance = ut - expected
+                st.metric("Variance", f"{variance:+.1f}h")
+            with col3:
+                variance_pct = (variance / expected * 100) if expected > 0 else 0
+                st.metric("Variance %", f"{variance_pct:+.1f}%")
+        
+        if rpt.get("weekly_hours"):
+            st.caption(f"📅 **Weekly Contract**: {rpt['weekly_hours']:.1f}h")
         
         if rpt["processed_shifts"]:
             st.caption("**Shifts:**")
@@ -789,7 +854,7 @@ def display_user_mobile(rpt, show_threshold_color=False):
         if rpt["total_leave_hours"] > 0:
             st.caption(f"**Leave:** {rpt['total_leave_days']:.1f} days ({rpt['total_leave_hours']:.1f}h)")
 
-def display_user(rpt, show_threshold_color=False):
+def display_user(rpt, show_variance_indicator=True):
     fname = rpt["first_name"]
     lname = rpt["last_name"]
     uid = rpt["user_id"]
@@ -799,22 +864,40 @@ def display_user(rpt, show_threshold_color=False):
     st.subheader(f"{fname} {lname} ({gender_display}) (ID: {uid})")
 
     ut = rpt["unified_total"]
-    if show_threshold_color and use_threshold_filter:
-        if ut < low_threshold:
-            color = "red"
-        elif ut > high_threshold:
-            color = "orange"
-        else:
-            color = "green"
-        st.markdown(
-            f"**Total Hours**: <span style='color:{color};'>{ut:.1f} hours</span>",
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(f"**Total Hours**: {ut:.2f} hours")
+    expected = rpt.get("expected_hours")
+    
+    # Main metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Hours", f"{ut:.2f}")
+    with col2:
+        st.metric("Shift Hours", f"{rpt['total_shift_hours']:.2f}")
+    with col3:
+        st.metric("Leave Hours", f"{rpt['total_leave_hours']:.2f}")
+    
+    # Variance section
+    if show_variance_indicator and expected is not None:
+        st.markdown("---")
+        variance = ut - expected
+        variance_pct = (variance / expected * 100) if expected > 0 else 0
+        variance_color = get_variance_color(ut, expected)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Weekly Contract", f"{rpt.get('weekly_hours', 'N/A')}")
+        with col2:
+            st.metric("Expected Hours", f"{expected:.2f}")
+        with col3:
+            st.markdown(f"<span style='color:{variance_color};'><b>Variance</b><br>{variance:+.2f}h ({variance_pct:+.1f}%)</span>", 
+                       unsafe_allow_html=True)
+        with col4:
+            emoji = get_variance_emoji(ut, expected)
+            st.metric("Status", emoji.split('(')[0].strip())
 
-    st.markdown(f"**Shift Hours**: {rpt['total_shift_hours']:.2f}")
+    st.markdown("---")
+    
     if rpt["processed_shifts"]:
+        st.markdown("**Shifts:**")
         rows = []
         for s in rpt["processed_shifts"]:
             day_name, date_str = weekday_and_ddmmyy(s["start_time_unix"])
@@ -833,8 +916,7 @@ def display_user(rpt, show_threshold_color=False):
         st.write("No shifts found.")
 
     if rpt["total_leave_hours"] > 0 or rpt["total_leave_days"] > 0:
-        st.markdown(f"**Leave Days**: {rpt['total_leave_days']:.1f}")
-        st.markdown(f"**Leave Hours**: {rpt['total_leave_hours']:.2f}")
+        st.markdown("**Leave:**")
         if rpt["processed_leave_records"]:
             rows = []
             for rec in rpt["processed_leave_records"]:
@@ -860,10 +942,6 @@ if st.sidebar.button("🔍 Test Connection"):
 if generate:
     if start_date > end_date:
         st.error("Invalid date range.")
-        st.stop()
-
-    if use_threshold_filter and low_threshold and high_threshold and low_threshold > high_threshold:
-        st.error("Invalid threshold range.")
         st.stop()
 
     with st.spinner("Testing connection..."):
@@ -911,6 +989,9 @@ if generate:
         progress_bar.progress((idx+1)/total_users)
         status_text.text(f"Processing {fname} {lname} ({idx+1}/{total_users})")
 
+        # Fetch weekly hours
+        weekly_hours = get_user_weekly_hours(uid)
+
         shifts_json = get_rc_shifts(start_ts, end_ts, uid)
         total_shift_hours, processed_shifts = process_user_shifts(shifts_json, start_date, end_date)
 
@@ -918,22 +999,33 @@ if generate:
         total_leave_days, total_leave_hours, processed_leave_records = process_user_leave(leave_json, start_date, end_date)
 
         unified_total = total_shift_hours + total_leave_hours
+        
+        # Calculate expected hours
+        expected_hours = calculate_expected_hours(weekly_hours, start_date, end_date)
+        variance = (unified_total - expected_hours) if expected_hours else None
 
         user_reports.append({
             "user_id": uid,
             "first_name": fname,
             "last_name": lname,
             "gender": gender,
+            "weekly_hours": weekly_hours,
+            "expected_hours": expected_hours,
             "total_shift_hours": total_shift_hours,
             "processed_shifts": processed_shifts,
             "total_leave_days": total_leave_days,
             "total_leave_hours": total_leave_hours,
             "processed_leave_records": processed_leave_records,
-            "unified_total": unified_total
+            "unified_total": unified_total,
+            "variance": variance
         })
 
     progress_bar.empty()
     status_text.empty()
+
+    # Apply variance filter if enabled
+    if enable_variance_filter:
+        user_reports = filter_by_variance(user_reports, variance_options)
 
     user_reports = sort_user_reports(user_reports, sort_option)
     
@@ -963,7 +1055,7 @@ if generate:
                     high_threshold
                 )
                 
-                filename = f"shift_report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pdf"
+                filename = f"shift_variance_report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pdf"
                 st.download_button(
                     label="📄 Export PDF",
                     data=pdf_buffer,
@@ -980,56 +1072,22 @@ if generate:
             gender_summary[gender_display] = gender_summary.get(gender_display, 0) + 1
         
         summary_text = ", ".join([f"{count} {gender}" for gender, count in gender_summary.items()])
-        st.success(f"👥 {len(user_reports)} users | {summary_text}")
+        
+        # Variance summary
+        under_worked = len([r for r in user_reports if r.get("variance") and r["variance"] < 0])
+        over_worked = len([r for r in user_reports if r.get("variance") and r["variance"] > 0])
+        on_target = len([r for r in user_reports if r.get("variance") == 0])
+        
+        st.success(f"👥 {len(user_reports)} users | {summary_text} | 🔴 {under_worked} under | 🟢 {over_worked} over | 🟡 {on_target} on-target")
     
     if st.session_state.mobile_view:
-        if use_threshold_filter and low_threshold and high_threshold:
-            below = [rpt for rpt in user_reports if rpt["unified_total"] < low_threshold]
-            above = [rpt for rpt in user_reports if rpt["unified_total"] > high_threshold]
-            between = [rpt for rpt in user_reports if low_threshold <= rpt["unified_total"] <= high_threshold]
-
-            if below:
-                st.write(f"### 🔴 Below {low_threshold}h ({len(below)} users)")
-                for rpt in below:
-                    display_user_mobile(rpt, show_threshold_color=True)
-
-            if above:
-                st.write(f"### 🟠 Above {high_threshold}h ({len(above)} users)")
-                for rpt in above:
-                    display_user_mobile(rpt, show_threshold_color=True)
-
-            if between:
-                st.write(f"### 🟢 {low_threshold}-{high_threshold}h ({len(between)} users)")
-                for rpt in between:
-                    display_user_mobile(rpt, show_threshold_color=True)
-        else:
-            st.write(f"### All Users ({len(user_reports)})")
-            for rpt in user_reports:
-                display_user_mobile(rpt)
+        st.write(f"### All Users ({len(user_reports)})")
+        for rpt in user_reports:
+            display_user_mobile(rpt, show_variance_indicator=True)
     else:
-        if use_threshold_filter and low_threshold and high_threshold:
-            below = [rpt for rpt in user_reports if rpt["unified_total"] < low_threshold]
-            above = [rpt for rpt in user_reports if rpt["unified_total"] > high_threshold]
-            between = [rpt for rpt in user_reports if low_threshold <= rpt["unified_total"] <= high_threshold]
-
-            if below:
-                st.header(f"Below {low_threshold} hours ({len(below)} users)")
-                for rpt in below:
-                    display_user(rpt, show_threshold_color=True)
-
-            if above:
-                st.header(f"Above {high_threshold} hours ({len(above)} users)")
-                for rpt in above:
-                    display_user(rpt, show_threshold_color=True)
-
-            if between:
-                st.header(f"Between {low_threshold}-{high_threshold} hours ({len(between)} users)")
-                for rpt in between:
-                    display_user(rpt, show_threshold_color=True)
-        else:
-            st.header(f"All Users ({len(user_reports)})")
-            for rpt in user_reports:
-                display_user(rpt)
+        st.write(f"### All Users ({len(user_reports)})")
+        for rpt in user_reports:
+            display_user(rpt, show_variance_indicator=True)
 
     st.success("✅ Report complete!")
 else:
@@ -1042,8 +1100,15 @@ else:
         st.write("• Swipe right or tap ⚙️ to open settings")
         st.write("• Tables are horizontally scrollable on mobile")
     
+    with st.expander("✨ Variance Analysis Features"):
+        st.write("• **Weekly Hours Extraction**: Automatically pulls contracted weekly hours from user profiles")
+        st.write("• **Expected Hours Calculation**: Uses formula: (days in period / 7) × weekly hours")
+        st.write("• **Color-Coded Status**: 🔴 Red = Under-worked, 🟢 Green = Over-worked, 🟡 Yellow = On-target")
+        st.write("• **Variance Filtering**: Filter users by their work status")
+        st.write("• **Detailed Variance Metrics**: View actual hours, expected hours, and percentage variance")
+    
     with st.expander("⚡ Quick Start"):
         st.write("1. Enter your API key in the sidebar")
         st.write("2. Select your date range or use period navigation")
-        st.write("3. Configure filters as needed")
-        st.write("4. Click **Generate Report** or **⚡ Quick Report**")
+        st.write("3. Configure filters as needed (including new Variance filter)")
+        st.write("4. Click **Generate Report** to see variance analysis")
