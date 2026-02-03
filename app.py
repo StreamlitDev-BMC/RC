@@ -948,6 +948,22 @@ with col4:
 
 st.sidebar.header("⚙️ Configuration")
 
+# ANALYTICS TOGGLE - PROMINENT AT TOP
+st.sidebar.markdown("### 📊 Analytics Module")
+enable_analytics = st.sidebar.checkbox(
+    "Enable Advanced Analytics",
+    value=st.session_state.enable_analytics,
+    help="Toggle advanced data visualizations (9 analysis tabs with clustering, compliance, cost analysis, etc.)"
+)
+st.session_state.enable_analytics = enable_analytics
+
+if enable_analytics:
+    st.sidebar.success("✅ Analytics enabled - will show after report generation")
+else:
+    st.sidebar.info("💡 Enable above to add advanced analytics dashboard")
+
+st.sidebar.markdown("---")
+
 with st.sidebar.expander("📅 Date Selection", expanded=True):
     manual_dates = st.checkbox("Manual Date Selection", value=False, 
                                help="Toggle to manually select dates")
@@ -1072,18 +1088,7 @@ with st.sidebar.expander("⚙️ Settings"):
         help="Comma-separated user IDs to ignore"
     )
 
-# ANALYTICS TOGGLE
-st.sidebar.markdown("---")
-st.sidebar.subheader("📊 Analytics Module")
-enable_analytics = st.sidebar.checkbox(
-    "Enable Advanced Analytics",
-    value=st.session_state.enable_analytics,
-    help="Toggle advanced data visualizations and analysis"
-)
-st.session_state.enable_analytics = enable_analytics
-
-if enable_analytics:
-    st.sidebar.info("💡 Analytics will show after generating a report")
+# ANALYTICS TOGGLE - PROMINENT AT TOP (moved to top of sidebar)
 
 api_key_input = st.sidebar.text_input(
     "🔑 API Key", 
@@ -1355,9 +1360,11 @@ def sort_user_reports(user_reports, sort_option):
     elif sort_option == "Lowest to Highest":
         return sorted(user_reports, key=lambda r: r["unified_total"])
     elif sort_option == "Most Under-worked":
-        return sorted(user_reports, key=lambda r: r.get("variance", 0) if r.get("variance") else float('inf'))
+        # Sort by variance ascending (most negative first), None values last
+        return sorted(user_reports, key=lambda r: (r.get("variance") is None, r.get("variance", 0)))
     elif sort_option == "Most Over-worked":
-        return sorted(user_reports, key=lambda r: r.get("variance", 0), reverse=True)
+        # Sort by variance descending (most positive first), None values last
+        return sorted(user_reports, key=lambda r: (r.get("variance") is None, r.get("variance", 0)), reverse=True)
     else:
         return user_reports
 
